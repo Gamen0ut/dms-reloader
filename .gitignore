@@ -1,0 +1,20 @@
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+
+# Qt / QML tooling
+*.qmlc
+*.jsc
+.qmlls.ini
+
+# Local notes & build artifacts
+dist/
+*.zip
+
+# Personal notes (not published)
+*.local.md
