@@ -2,7 +2,7 @@
   "id": "reloader",
   "name": "Reloader",
   "description": "Hot-reload DMS plugins from the bar, no shell restart",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Gamen0ut",
   "icon": "refresh",
   "type": "widget",

@@ -8,6 +8,8 @@ While Reloader is `0.x`, minor bumps may change settings keys.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-09
+
 ### Added
 - Hover labels on every button in the popout, so the icons no longer have to be guessed.
 - Multi-select: a checkbox on each row and a "Reload N selected" button that appears once something is ticked. A selection ignores the exclusion list, since ticking a plugin is an explicit choice.
@@ -27,5 +29,6 @@ While Reloader is `0.x`, minor bumps may change settings keys.
 - Settings: "Show toasts" toggle and a comma-separated exclusion list.
 - `dev.sh` helper to link, reload, check status and cut releases.
 
-[Unreleased]: https://github.com/Gamen0ut/dms-reloader/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Gamen0ut/dms-reloader/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Gamen0ut/dms-reloader/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Gamen0ut/dms-reloader/releases/tag/v0.1.0
