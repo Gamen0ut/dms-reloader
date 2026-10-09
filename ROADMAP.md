@@ -25,6 +25,9 @@ Legend: 🟢 easy · 🟡 medium · 🔴 hard. **Needs** = the DMS/Quickshell AP
 
 Everything that hurts once you have 15 plugins installed.
 
+- [x] 🟢 **Hover labels** on every button in the popout. *Needs:* `DankTooltipV2.show(text, item)`
+- [x] 🟡 **Multi-select** with a checkbox per row and a "Reload N selected" button, overriding the exclusion list
+- [x] 🟡 **Plugin details on right-click**: version, author, description, permissions, source, folder. *Needs:* `pluginService.availablePlugins[id]`
 - [ ] 🟢 **Filter field** at the top of the popout. *Needs:* `DankTextField`, a filtered list model
 - [ ] 🟢 **Sort errored plugins first**, then alphabetically, so breakage is at the top
 - [ ] 🟢 **Keyboard navigation** in the popout: ↑/↓ to move, Enter to reload, Esc to close. *Needs:* `Keys`, focus handling in popouts
@@ -119,4 +122,11 @@ DMS plugin API facts worth remembering, verified against DMS 1.6.2.
 - **QML tracks dependencies through function calls**, so `isSkipped: root.isExcluded(id)` re-evaluates when `root.excluded` changes — no manual signal needed.
 - **`MouseArea.cursorShape` works without `hoverEnabled`**, so a click-only row still gets a pointing hand.
 - **Use `!== undefined` (or `??`) for boolean settings**: `pluginData.showToasts || true` would ignore a saved `false`.
+- **The parsed manifest is already in memory**: `pluginService.availablePlugins[id]` holds every manifest field plus `pluginDirectory`, `manifestPath`, `source` (`user`/`system`), `surfaces` and `loaded`. A plugin never has to read another plugin's `plugin.json` itself. `WidgetHost` assigns the real `PluginService` singleton, not a trimmed wrapper, so its properties are all reachable.
+- **`plugins list` is the only live state source**: `availablePlugins[id].loaded` is a snapshot from scan time, so pair the manifest with the IPC list for the current state.
+- **`DankTooltipV2.show(text, item)`** parents a `Popup` into the window containing `item` and positions it on the side with room. It is single-line and elides at 500px, so hover labels have to stay short. One instance per popout can serve every button.
+- **A `HoverHandler` gives a tooltip to a click-through item**: pointer handlers observe hover without accepting clicks, so an icon can show a label while its clicks still fall through to the row's `MouseArea` underneath.
+- **Children of a `Flickable` are parented to its `contentItem`**, whose width is `contentWidth` — unset by default. `width: parent.width` on a child silently collapses to 0; bind to the flickable's own id (or set `contentWidth`) instead.
+- **`visible` wants a real bool**: `visible: obj && obj.someString` warns about assigning a string. `!!(…)` fixes it.
+- **A popout can be opened from code** with `PluginComponent`'s `triggerPopout()` / `closePopout()` — there is no IPC for a plugin's own popout. Worth knowing for smoke tests: `popoutContent` is a lazy `Component`, so a successful `plugins reload` proves nothing about it. Open it once and check `niri msg layers` for `dms:plugins:<id>` plus the journal for QML errors.
 - **Docs ship with DMS**: `/usr/share/quickshell/dms/PLUGINS/` has a README, the manifest JSON schema and ~12 example plugins; settings components live in `/usr/share/quickshell/dms/Modules/Plugins/`.

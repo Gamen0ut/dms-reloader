@@ -9,9 +9,12 @@ Built for plugin authors: the dev loop goes from *"restart DMS, lose your sessio
 - Lists every installed plugin with its load state (loaded / error)
 - Click a row to reload that plugin
 - **Reload all** in one click, with a single summary toast
+- **Tick several plugins** and reload just those — handy when two plugins talk to each other
+- **Right-click a row** for the plugin's details: version, author, description, permissions, folder
 - Skips itself — Reloader never pulls the rug out from under the popout
 - Per-plugin exclusions, toggled right from the row or typed in settings
-- Copy a plugin id to the clipboard for `dms ipc` calls and `dev.sh` scripts
+- Copy a plugin id (or its folder path) to the clipboard for `dms ipc` calls and `dev.sh` scripts
+- Hover labels on every button, so nothing is a mystery icon
 - Works in horizontal and vertical bars; the pill spins while a bulk reload runs
 
 ## Requirements
@@ -42,12 +45,21 @@ Click the pill to open the popout:
 | Action | Result |
 |---|---|
 | Click a plugin row | Reloads that plugin, toast on success or failure |
+| **Right-click** a plugin row | Opens its details; the back arrow returns to the list |
+| Checkbox on a row | Ticks the plugin for **Reload N selected** |
 | **Reload all** | Reloads every plugin except Reloader and your exclusions |
+| **Reload N selected** | Appears once something is ticked; reloads exactly those |
 | Sync icon (top right) | Re-reads the plugin list |
 | 🗐 on a row (hover) | Copies the plugin id to the clipboard |
 | 🚫 on a row (hover) | Adds/removes the plugin from the **Reload all** exclusions |
 
-Excluded plugins keep a 🚫 marker and a `skipped` label, and can still be reloaded individually by clicking the row. The copy action always toasts (it is the only feedback that it worked), even with "Show toasts" off.
+Every button has a hover label, so the icons do not have to be guessed.
+
+**Selections beat exclusions.** Ticking a plugin is an explicit choice, so **Reload N selected** reloads it even if it is in the exclusion list. Excluded plugins keep a 🚫 marker and a `skipped` label, and can always be reloaded individually by clicking the row.
+
+**Details** come from the manifest DMS already parsed, so they cost nothing to show: id, version, author, type, live state, source (user or system), `requires_dms`, capabilities, permissions and the plugin folder — plus buttons to reload it, copy its id, or copy its path.
+
+The copy actions always toast (it is the only feedback that they worked), even with "Show toasts" off.
 
 ## Settings
 
