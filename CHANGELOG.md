@@ -21,6 +21,7 @@ While Reloader is `0.x`, minor bumps may change settings keys.
 ### Added
 - **Reload shell** button in the popout's top row, for the one thing a plugin reload cannot cover: a change to DMS itself. It calls `Quickshell.reload(false)` — a fresh QML graph in about two seconds, no process restart and no lost session state. Placed past the sync button so it is not a near miss for "Reload all".
 - The same shell reload doubles as a last-resort fallback, used only when a plugin's farm cannot be built.
+
 ## [0.2.0] - 2026-10-09
 
 ### Added
