@@ -33,7 +33,7 @@ PluginSettings {
     StringSetting {
         settingKey: "excluded"
         label: "Skip in \"Reload all\""
-        description: "Comma-separated plugin ids, e.g. batteryOSD, mediaPlayer"
+        description: "Comma-separated plugin ids, e.g. batteryOSD, mediaPlayer. Also togglable from the 🚫 button on each row in the popout."
         placeholder: "id1, id2"
         defaultValue: ""
     }

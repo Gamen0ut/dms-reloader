@@ -24,6 +24,10 @@ PluginComponent {
         return excluded.split(",").map(s => s.trim()).filter(s => s.length > 0)
     }
 
+    function isExcluded(id) {
+        return excludedList().indexOf(id) !== -1
+    }
+
     function setBusy(id, value) {
         const b = Object.assign({}, busy)
         if (value) b[id] = true
@@ -52,6 +56,31 @@ PluginComponent {
         }, 50, 5000, root)
     }
 
+    // Always toasts: copying leaves no visible trace in the popout, so this is
+    // the only feedback that it worked, even with showToasts off.
+    function copyId(id) {
+        Proc.runCommand(null, ["dms", "clipboard", "copy", id], (stdout, code) => {
+            if (code === 0) ToastService.showInfo("Copied: " + id)
+            else ToastService.showError("Could not copy " + id, stdout.trim() || ("exit " + code))
+        }, 0, 5000, root)
+    }
+
+    function toggleExcluded(id) {
+        if (id === selfId) return
+        const list = excludedList()
+        const i = list.indexOf(id)
+        const adding = i === -1
+        if (adding) list.push(id)
+        else list.splice(i, 1)
+        const value = list.join(", ")
+        // savePluginData emits pluginDataChanged, which re-evaluates `excluded`.
+        if (pluginService) pluginService.savePluginData(root.pluginId, "excluded", value)
+        else excluded = value
+        if (showToasts)
+            ToastService.showInfo(adding ? id + " skipped in \"Reload all\""
+                                         : id + " back in \"Reload all\"")
+    }
+
     function reloadOne(id, silent, done) {
         if (id === selfId) return
         setBusy(id, true)
@@ -72,7 +101,10 @@ PluginComponent {
         const targets = plugins
             .map(p => p.id)
             .filter(id => id !== selfId && skip.indexOf(id) === -1)
-        if (targets.length === 0) return
+        if (targets.length === 0) {
+            if (showToasts) ToastService.showWarning("Nothing to reload", "Every plugin is excluded")
+            return
+        }
 
         reloadingAll = true
         let remaining = targets.length
@@ -129,8 +161,12 @@ PluginComponent {
     popoutContent: Component {
         PopoutComponent {
             id: pop
+
+            readonly property int skippedCount: root.excludedList().length
+
             headerText: "Reloader"
-            detailsText: root.plugins.length + " plugins"
+            detailsText: skippedCount > 0 ? root.plugins.length + " plugins · " + skippedCount + " skipped"
+                                          : root.plugins.length + " plugins"
             showCloseButton: true
 
             Component.onCompleted: root.refresh()
@@ -209,15 +245,22 @@ PluginComponent {
                         model: root.plugins
 
                         delegate: StyledRect {
+                            id: row
+
                             required property var modelData
                             readonly property bool isSelf: modelData.id === root.selfId
                             readonly property bool isBusy: root.busy[modelData.id] === true
                             readonly property bool isLoaded: modelData.state === "loaded"
+                            readonly property bool isSkipped: root.isExcluded(modelData.id)
 
                             width: ListView.view.width
                             height: 44
                             radius: Theme.cornerRadius
-                            color: rowMouse.containsMouse && !isSelf ? Theme.surfaceContainerHighest : Theme.surfaceContainerHigh
+                            color: rowHover.hovered && !isSelf ? Theme.surfaceContainerHighest : Theme.surfaceContainerHigh
+
+                            // A HoverHandler keeps reporting hover while the pointer is
+                            // over a child MouseArea, which a parent MouseArea would not.
+                            HoverHandler { id: rowHover }
 
                             Row {
                                 anchors.left: parent.left
@@ -228,45 +271,107 @@ PluginComponent {
                                 Rectangle {
                                     width: 8; height: 8; radius: 4
                                     anchors.verticalCenter: parent.verticalCenter
-                                    color: isLoaded ? Theme.primary : Theme.error
+                                    color: row.isLoaded ? Theme.primary : Theme.error
+                                    opacity: row.isSkipped ? 0.5 : 1
                                 }
                                 StyledText {
-                                    text: modelData.id
+                                    text: row.modelData.id
                                     font.pixelSize: Theme.fontSizeMedium
                                     color: Theme.surfaceText
+                                    opacity: row.isSkipped ? 0.6 : 1
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
                                 StyledText {
-                                    visible: !isLoaded || isSelf
-                                    text: isSelf ? "(this)" : modelData.state
+                                    visible: text.length > 0
+                                    text: row.isSelf ? "(this)" : (!row.isLoaded ? row.modelData.state : (row.isSkipped ? "skipped" : ""))
                                     font.pixelSize: Theme.fontSizeSmall
                                     color: Theme.surfaceVariantText
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
                             }
 
-                            DankIcon {
-                                visible: !isSelf
-                                anchors.right: parent.right
-                                anchors.rightMargin: Theme.spacingM
-                                anchors.verticalCenter: parent.verticalCenter
-                                name: "refresh"
-                                size: Theme.iconSize - 4
-                                color: rowMouse.containsMouse ? Theme.primary : Theme.surfaceVariantText
-                                RotationAnimation on rotation {
-                                    running: isBusy
-                                    loops: Animation.Infinite
-                                    from: 0; to: 360; duration: 800
-                                }
-                            }
-
+                            // Declared before the action buttons so they sit on top of it;
+                            // the reload icon has no MouseArea and falls through to here.
                             MouseArea {
                                 id: rowMouse
                                 anchors.fill: parent
-                                hoverEnabled: true
-                                enabled: !isSelf && !isBusy
-                                cursorShape: isSelf ? Qt.ArrowCursor : Qt.PointingHandCursor
-                                onClicked: root.reloadOne(modelData.id, false)
+                                enabled: !row.isSelf && !row.isBusy
+                                cursorShape: row.isSelf ? Qt.ArrowCursor : Qt.PointingHandCursor
+                                onClicked: root.reloadOne(row.modelData.id, false)
+                            }
+
+                            Row {
+                                anchors.right: parent.right
+                                anchors.rightMargin: Theme.spacingS
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 0
+
+                                // Copy the plugin id
+                                Item {
+                                    id: copyBtn
+                                    width: 28; height: 28
+                                    opacity: rowHover.hovered ? 1 : 0
+                                    Behavior on opacity { NumberAnimation { duration: Theme.shortDuration } }
+
+                                    DankIcon {
+                                        anchors.centerIn: parent
+                                        name: "content_copy"
+                                        size: Theme.iconSize - 6
+                                        color: copyMouse.containsMouse ? Theme.primary : Theme.surfaceVariantText
+                                    }
+                                    MouseArea {
+                                        id: copyMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        enabled: copyBtn.opacity > 0
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: root.copyId(row.modelData.id)
+                                    }
+                                }
+
+                                // Skip in / restore to "Reload all"
+                                Item {
+                                    id: skipBtn
+                                    width: 28; height: 28
+                                    visible: !row.isSelf
+                                    opacity: (rowHover.hovered || row.isSkipped) ? 1 : 0
+                                    Behavior on opacity { NumberAnimation { duration: Theme.shortDuration } }
+
+                                    DankIcon {
+                                        anchors.centerIn: parent
+                                        name: "block"
+                                        size: Theme.iconSize - 6
+                                        color: row.isSkipped ? Theme.error
+                                             : skipMouse.containsMouse ? Theme.primary
+                                             : Theme.surfaceVariantText
+                                    }
+                                    MouseArea {
+                                        id: skipMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        enabled: skipBtn.opacity > 0
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: root.toggleExcluded(row.modelData.id)
+                                    }
+                                }
+
+                                // Reload (click anywhere on the row)
+                                Item {
+                                    width: 28; height: 28
+                                    visible: !row.isSelf
+
+                                    DankIcon {
+                                        anchors.centerIn: parent
+                                        name: "refresh"
+                                        size: Theme.iconSize - 4
+                                        color: rowHover.hovered ? Theme.primary : Theme.surfaceVariantText
+                                        RotationAnimation on rotation {
+                                            running: row.isBusy
+                                            loops: Animation.Infinite
+                                            from: 0; to: 360; duration: 800
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
