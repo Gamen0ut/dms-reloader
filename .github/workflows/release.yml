@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches plugin.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(jq -r .version plugin.json)"
+          if [ "$tag" != "$version" ]; then
+            echo "Tag v$tag does not match plugin.json version $version" >&2
+            exit 1
+          fi
+
+      - name: Build archive
+        run: |
+          mkdir -p dist/Reloader
+          cp plugin.json *.qml LICENSE README.md dist/Reloader/
+          (cd dist && zip -r "Reloader-${GITHUB_REF_NAME}.zip" Reloader)
+
+      - name: Extract release notes
+        run: |
+          awk -v v="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## \\[" v "\\]" {on=1; next}
+            on && /^## \[/ {exit}
+            on {print}
+          ' CHANGELOG.md > notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: notes.md
+          files: dist/Reloader-${{ github.ref_name }}.zip
