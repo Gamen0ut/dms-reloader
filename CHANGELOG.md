@@ -8,6 +8,8 @@ While Reloader is `0.x`, minor bumps may change settings keys.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-09
+
 ### Fixed
 - A reload now really reloads plugins that are more than one file. `dms ipc call plugins reload <id>` only cache-busts the entry file the manifest names, and a relative import resolves against the base URL with the query dropped — so every imported `.js`, every sibling `.qml` used as a type, and the settings page all came back out of Qt's type cache. The plugin reloaded against stale code and still reported success.
 - Reloading a plugin whose last load failed no longer silently loads the old file. Reloader no longer goes through DMS's reload IPC, so it never hits the `enablePlugin()` branch that skips the cache bust entirely.
@@ -43,6 +45,7 @@ While Reloader is `0.x`, minor bumps may change settings keys.
 - Settings: "Show toasts" toggle and a comma-separated exclusion list.
 - `dev.sh` helper to link, reload, check status and cut releases.
 
-[Unreleased]: https://github.com/Gamen0ut/dms-reloader/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Gamen0ut/dms-reloader/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Gamen0ut/dms-reloader/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Gamen0ut/dms-reloader/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Gamen0ut/dms-reloader/releases/tag/v0.1.0
