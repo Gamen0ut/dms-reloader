@@ -1,0 +1,14 @@
+{
+  "id": "reloader",
+  "name": "Reloader",
+  "description": "Hot-reload DMS plugins from the bar, no shell restart",
+  "version": "0.1.0",
+  "author": "Gamen0ut",
+  "icon": "refresh",
+  "type": "widget",
+  "capabilities": ["dankbar-widget", "plugin-management", "command-execution", "clipboard"],
+  "component": "./Reloader.qml",
+  "settings": "./ReloaderSettings.qml",
+  "permissions": ["settings_read", "settings_write", "process"],
+  "requires_dms": ">=1.6.0"
+}
