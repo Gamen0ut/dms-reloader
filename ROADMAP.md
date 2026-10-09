@@ -45,7 +45,7 @@ The headline feature: stop clicking entirely.
 - [ ] 🟡 **Watch indicator in the bar**: a dot on the pill while any watch is live
 - [ ] 🟡 **Pause watching** while a bulk reload runs, to avoid reload storms
 - [ ] 🟢 **Ignore list** for paths that should not trigger (`.git/`, `*.qmlc`, editor swap files)
-- [ ] 🔴 **Resolve symlinked plugin folders** to their real path before watching — the usual dev setup is a symlink into `~/.config/DankMaterialShell/plugins/`
+- [ ] 🔴 **Resolve symlinked plugin folders** to their real path before watching — the usual dev setup is a symlink into `~/.config/DankMaterialShell/plugins/` — though the farm sidesteps it for reloading, since the symlinks it builds point at the real files
 
 ## 0.4.0 — Diagnostics
 
@@ -55,7 +55,7 @@ Make a failed reload tell you why.
 - [ ] 🟡 **Capture the QML error output** from the reload so type errors are readable in the popout. *Needs:* finding where DMS surfaces plugin load errors (`pluginLoadFailed`)
 - [ ] 🟢 **Reload history**: last N reloads with result and duration. *Needs:* `savePluginState`
 - [ ] 🟢 **Reload duration** per plugin, to spot the slow ones
-- [ ] 🟡 **Retry once on failure**, behind a setting — `plugins reload` fails every other time for plugins that import sibling files (see Notes)
+- [x] 🟡 **Retry on failure is unnecessary** — the farm gives a failed reload a fresh path, so fixing the error and clicking again just works (see Notes)
 - [ ] 🟢 **Copy the error** to the clipboard, next to the copy-id button
 
 ## 0.5.0 — Plugin management
@@ -110,7 +110,17 @@ Make a failed reload tell you why.
 
 DMS plugin API facts worth remembering, verified against DMS 1.6.2.
 
-- **`plugins reload` alternates success/failure** once a plugin imports a sibling file (`import "X.js"`, or another `.qml` used as a type), failing with a misleading *File name case mismatch*. Only the dev loop is affected — startup and enable/disable load fine. **This is why all of Reloader's logic lives in `Reloader.qml`**: a reloader that needs two clicks to reload itself is not a good advert. It is also why `dev.sh reload` in Duck retries once.
+- **`plugins reload <id>` only re-reads the manifest's entry file.** `PluginService.reloadPlugin()` unloads, then calls `loadPlugin(id, bustCache=true)`, and that bust is one `?t=<now>` appended to each path in `component`/`components`. A relative import resolves against the base URL with the query **dropped** — verified: inside `Entry.qml?t=1`, `Qt.resolvedUrl("Lib.js")` returns a plain `file://…/Lib.js`. So every sibling comes straight back out of Qt's type cache and the plugin reloads against stale code while reporting `PLUGIN_RELOAD_SUCCESS`. It applies equally to `.pragma library` scripts, plain `.js`, and sibling `.qml` used as a type — all three were stale in one probe while the entry file updated. Three corollaries:
+  - **A file added since the shell started cannot be resolved at all.** Qt already has the directory cached, so the import fails with a misleading *`Script …/X.js unavailable`* plus *`File name case mismatch`* — the file is right there, correctly cased.
+  - **After any failed load the plugin is left unloaded, and `plugins reload` then takes a different branch**: `enablePlugin() → runStartupGate() → loadPlugin(id)`, *without* `bustCache`. So the reload right after you fix a syntax error silently loads the cached old file and reports success. That, not an alternating bug, is what "fails every other time" really was.
+  - **The settings surface is never busted at all.** `Modules/Settings/PluginListItem.qml` loads `settingsPath` from a plain `file://` URL with no `?t=`.
+- **An exception from a stale import inside a plugin's `Component.onCompleted` is swallowed** — nothing reaches the journal. The plugin reports loaded and is half-initialised, which is what "I reloaded and nothing changed" usually looks like.
+- **Loading a plugin from a directory the engine has never seen reloads it completely**, with no shell reload. Every URL under a fresh directory is new, so nothing there can be cached. **Qt does not canonicalise symlinks for its type-cache key** — a farm of symlinks at `<cache>/reloader/<id>.<epoch ms>/` pointing into the real plugin folder loads the files you are editing under brand-new URLs, costs nothing to build, and refreshed all three import kinds plus a newly added file in one go. This is how Reloader reloads; see `hotReload()`.
+- **A plugin can drive `PluginService` directly**: `unloadPlugin(id)` then `loadPlugin(id, true)`, having rewritten `availablePlugins[id].componentPaths` (and `settingsPath`) to the farm. The objects in `availablePlugins` are plain JS, so they can be mutated in place; DMS rebuilds them from the manifest on its next scan, so the override is temporary and `dms ipc call plugin-scan rescan <id>` is the escape hatch. Leave `pluginDirectory` alone — the details view and translations read it.
+- **Reloader can hot-reload itself this way** (verified), as long as `PluginService` is captured into a local *before* `unloadPlugin` destroys the plugin instance: a local reference survives the destruction where a property read on the dead object would not. Still gated behind `selfId` for now, since reloading itself with a syntax error leaves no button to click.
+- **Put the farm override back as soon as `loadPlugin()` returns.** A farm is a snapshot of the folder at reload time. Left in `availablePlugins`, it hides files added afterwards and hands that stale snapshot to every other reload route — DMS's reload IPC, the Settings button, a plugin's own `dev.sh` — which looks exactly like "I reloaded and nothing changed". The component is compiled and held by `PluginService` by then, so restoring the real paths costs nothing. `settingsPath` is the one worthwhile exception, since DMS loads it from a plain `file://` URL that is never cache-busted.
+- **Never reuse a farm path.** An in-memory counter is not enough: Reloader reloading itself resets it, the path gets reused, and Qt serves the cached unit from the first time that URL was loaded. The token has to be a timestamp.
+
 - **`capabilities` is required** by `plugin-schema.json` even though a plugin loads happily without it. Worth adding before submitting anywhere.
 - **`plugins list` prints `id [state]`** per line, nothing else — no name, version or path. `plugins status <id>` prints just `loaded`. Anything richer has to come from reading each plugin's `plugin.json`.
 - **`plugins reload` output** is `PLUGIN_RELOAD_SUCCESS: <id>` or a line containing `FAILED`, so exit code alone is not enough to detect failure.

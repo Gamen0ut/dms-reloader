@@ -8,7 +8,9 @@ Built for plugin authors: the dev loop goes from *"restart DMS, lose your sessio
 
 - Lists every installed plugin with its load state (loaded / error)
 - Click a row to reload that plugin
+- **Reloads multi-file plugins properly** — imported `.js`, sibling `.qml` types, files you just created and the settings page all come back fresh, with no shell reload (see [How the reload works](#how-the-reload-works))
 - **Reload all** in one click, with a single summary toast
+- **Reload shell** button for the one case a plugin reload cannot cover: changes to DMS itself
 - **Tick several plugins** and reload just those — handy when two plugins talk to each other
 - **Right-click a row** for the plugin's details: version, author, description, permissions, folder
 - Skips itself — Reloader never pulls the rug out from under the popout
@@ -44,12 +46,13 @@ Click the pill to open the popout:
 
 | Action | Result |
 |---|---|
-| Click a plugin row | Reloads that plugin, toast on success or failure |
+| Click a plugin row | Reloads that plugin, toast on success or the real QML error on failure |
 | **Right-click** a plugin row | Opens its details; the back arrow returns to the list |
 | Checkbox on a row | Ticks the plugin for **Reload N selected** |
 | **Reload all** | Reloads every plugin except Reloader and your exclusions |
+| **Reload shell** | Rebuilds DMS and every plugin via `Quickshell.reload()` — for when you changed DMS, not a plugin |
 | **Reload N selected** | Appears once something is ticked; reloads exactly those |
-| Sync icon (top right) | Re-reads the plugin list |
+| Sync icon | Re-reads the plugin list |
 | 🗐 on a row (hover) | Copies the plugin id to the clipboard |
 | 🚫 on a row (hover) | Adds/removes the plugin from the **Reload all** exclusions |
 
@@ -60,6 +63,37 @@ Every button has a hover label, so the icons do not have to be guessed.
 **Details** come from the manifest DMS already parsed, so they cost nothing to show: id, version, author, type, live state, source (user or system), `requires_dms`, capabilities, permissions and the plugin folder — plus buttons to reload it, copy its id, or copy its path.
 
 The copy actions always toast (it is the only feedback that they worked), even with "Show toasts" off.
+
+## How the reload works
+
+`dms ipc call plugins reload <id>` cannot reload a plugin that is more than one file, and this is worth knowing because it is silent. DMS busts the cache by appending `?t=<now>` to the entry file the manifest names — and a relative import resolves against the base URL with the query **dropped**. Inside `Duck.qml?t=1`, `Qt.resolvedUrl("Stats.js")` is a plain `file://…/Stats.js`, which Qt's type loader already has compiled. So `import "Stats.js" as Stats`, a sibling `ConfirmButton.qml` used as a type, and the settings page all come back **stale** while the reload reports `PLUGIN_RELOAD_SUCCESS`. An exception thrown by one of those stale imports during the plugin's `Component.onCompleted` is swallowed too, so nothing lands in the journal either.
+
+Reloader sidesteps all of it by loading the plugin from a directory the engine has never seen. Every URL under a fresh path is new, so nothing there can be cached. The directory is a farm of symlinks into the real plugin folder:
+
+```
+~/.cache/DankMaterialShell/reloader/duck.1791510286867/
+├── Duck.qml          -> ~/Projects/Duck/Duck.qml
+├── DuckStats.js      -> ~/Projects/Duck/DuckStats.js
+└── ConfirmButton.qml -> ~/Projects/Duck/ConfirmButton.qml
+```
+
+Symlinks, so building one costs nothing and the files stay exactly the ones you are editing. Reloader points the plugin's `componentPaths` and `settingsPath` at the farm, then calls `PluginService.unloadPlugin()` and `loadPlugin()` directly. **No shell reload, no `dms restart`, no lost session state** — and three long-standing traps disappear with it:
+
+- a file you created since the shell started now resolves, instead of failing with a misleading *`Script …/X.js unavailable`* and *`File name case mismatch`*
+- the reload after a failed one picks up your fix, instead of silently loading the cached old file and reporting success (DMS reaches an unloaded plugin through `enablePlugin()`, which skips the cache bust entirely — Reloader no longer goes through that IPC at all)
+- an edit to the settings page shows up, instead of never reloading
+
+`componentPaths` points at the farm only for the duration of the `loadPlugin()` call, and is handed straight back afterwards. That matters: a farm is a **snapshot**, so leaving it in place would hide files you add later and would quietly feed that stale snapshot to every *other* way of reloading the plugin — DMS's own reload IPC, the button in Settings, your own `dev.sh`. The component is already compiled and held by `PluginService` by then, so restoring it costs nothing and leaves no trace.
+
+The settings page is the one deliberate exception: DMS loads `settingsPath` from a plain `file://` URL with no cache bust at all, so pointing it at the farm is the only way an edit there ever shows up. It always names the newest farm, which pruning keeps. `pluginDirectory` is left alone throughout, so the details view and **copy folder path** stay truthful. Farms are kept two deep per plugin and pruned on the next reload.
+
+One thing this cannot fix: `dms ipc call plugins reload <id>` is still DMS's own reload, with all the limits above. A `dev.sh reload` built on it will not pick up a change to an imported file no matter what — use the popout, or bind a keybind to Reloader.
+
+### Reload shell
+
+Reloading a plugin cannot pick up a change to **DMS itself** — its own QML is compiled into the running engine, outside any plugin folder. That is what the **Reload shell** button is for: it calls `Quickshell.reload(false)`, which rebuilds the whole QML graph against a fresh engine in about two seconds, without restarting the process or dropping your session. Reloader also falls back to it on its own if a farm cannot be built, which in normal use never happens.
+
+It sits past the sync button rather than next to **Reload all**, deliberately: it is the one action in that row that takes the whole shell with it, so it should not be a near miss for the one that does not.
 
 ## Settings
 
@@ -76,7 +110,7 @@ The copy actions always toast (it is the only feedback that they worked), even w
 ./dev.sh status    # check whether the plugin is loaded
 ```
 
-Reloader can reload every plugin but itself, so `./dev.sh reload` (or `dms ipc call plugins reload reloader`) is how you iterate on Reloader.
+Reloader still skips itself in the popout, so `./dev.sh reload` (or `dms ipc call plugins reload reloader`) is how you iterate on Reloader. Self-reload through the farm does work — it is held back only because reloading yourself with a syntax error leaves no button to click.
 
 ### Project layout
 
@@ -90,7 +124,7 @@ dms-reloader/
 └── ROADMAP.md
 ```
 
-All logic lives in `Reloader.qml` on purpose: `plugins reload` fails every other time for plugins that import a sibling `.js` or `.qml` file, which would be a poor look on a reloader. See [ROADMAP.md](ROADMAP.md#notes--learnings).
+All logic lives in `Reloader.qml` on purpose: an entry file with no imports is the one shape that `dms ipc call plugins reload reloader` can refresh on its own, which is what `./dev.sh reload` relies on. See [How the reload works](#how-the-reload-works) and the notes in [ROADMAP.md](ROADMAP.md#notes--learnings).
 
 ## Versioning & releases
 

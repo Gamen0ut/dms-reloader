@@ -3,6 +3,7 @@ import qs.Common
 import qs.Services
 import qs.Widgets
 import qs.Modules.Plugins
+import Quickshell
 
 PluginComponent {
     id: root
@@ -18,10 +19,29 @@ PluginComponent {
     property var busy: ({})           // id -> true while reloading
     property var selected: ({})       // id -> true when ticked for "Reload selected"
     property bool reloadingAll: false
+    property bool shellReloading: false
     readonly property string selfId: "reloader"
+
+    // id -> the QML error from the last failed load, straight from PluginService
+    property var loadErrors: ({})
 
     // Reads `plugins` and `selected`, so bindings on it update with either.
     readonly property int selectedCount: selectedIds().length
+
+    Connections {
+        target: root.pluginService
+        function onPluginLoadFailed(pluginId, error) {
+            const m = Object.assign({}, root.loadErrors)
+            m[pluginId] = error
+            root.loadErrors = m
+        }
+        function onPluginLoaded(pluginId) {
+            if (root.loadErrors[pluginId] === undefined) return
+            const m = Object.assign({}, root.loadErrors)
+            delete m[pluginId]
+            root.loadErrors = m
+        }
+    }
 
     // ---------- helpers ----------
     function excludedList() {
@@ -80,6 +100,135 @@ PluginComponent {
         return out
     }
 
+    // ---------- hot reload ----------
+    // `dms ipc call plugins reload <id>` cannot reload a plugin that is more than
+    // one file. PluginService busts the cache by appending ?t=<now> to the entry
+    // file named in the manifest, but a relative import resolves against the base
+    // URL with the query dropped, so every sibling the entry file imports keeps
+    // its plain file:// URL and comes straight back out of Qt's type cache. The
+    // plugin then reloads against stale code and still reports success.
+    //
+    // Loading it from a directory it has never been loaded from fixes all of it
+    // at once: every URL under a fresh directory is new, so nothing there can be
+    // cached — imported .js, sibling .qml types, files added since the shell
+    // started, and the settings page alike. The directory is a farm of symlinks
+    // into the real plugin folder, so it costs nothing and the files stay the ones
+    // being edited.
+    readonly property string farmRoot: Paths.strip(Paths.cache) + "/reloader"
+
+    // Rewrites a farm path back to the real plugin folder, so reloading twice
+    // does not nest one farm inside the next. Stateless on purpose: Reloader
+    // reloading itself must not lose track of where a plugin really lives.
+    function realPath(src, path) {
+        if (path.indexOf(src + "/") === 0)
+            return path
+        const prefix = farmRoot + "/"
+        if (path.indexOf(prefix) === 0) {
+            const rest = path.slice(prefix.length)   // "<id>.<token>/<relative path>"
+            const slash = rest.indexOf("/")
+            if (slash !== -1)
+                return src + "/" + rest.slice(slash + 1)
+        }
+        return path
+    }
+
+    // Relative to the plugin folder, so a manifest pointing at ./src/Widget.qml
+    // keeps its subdirectory: the farm symlinks the folder's top level, so the
+    // subdirectory resolves through it and its files get farm URLs too.
+    function relTo(src, path) {
+        return path.indexOf(src + "/") === 0 ? path.slice(src.length + 1) : path
+    }
+
+    function hotReload(id, silent, done) {
+        // Reloading Reloader works, but unloadPlugin() destroys this object
+        // mid-callback, so everything after it would run against a dead `root`.
+        if (id === selfId) return
+        const ps = pluginService
+        const info = ps ? ps.availablePlugins[id] : null
+        if (!info || !info.pluginDirectory || !info.componentPaths) {
+            reloadShell(id)
+            return
+        }
+        const src = info.pluginDirectory
+        const farm = farmRoot + "/" + id + "." + Date.now()   // never a path seen before
+        setBusy(id, true)
+        // $1 = farm prefix, $2 = new farm, $3 = the real plugin folder. Farms are
+        // named <id>.<epoch ms>, so sorting them is sorting them by age; the
+        // newest is kept because the instance about to be replaced may still load
+        // a file from it lazily. Dotfiles are left out, which keeps .git out.
+        Proc.runCommand(null, ["sh", "-c",
+            'set -e; ls -d -- "$1".* 2>/dev/null | sort | head -n -1 | xargs -r rm -rf --; ' +
+            'mkdir -p -- "$2"; ' +
+            'for f in "$3"/*; do [ -e "$f" ] && ln -s -- "$f" "$2"/; done; :',
+            "reloader-farm", farmRoot + "/" + id, farm, src],
+        (stdout, code) => {
+            if (code !== 0) {
+                root.setBusy(id, false)
+                root.reloadShell(id)                  // could not build the farm
+                return
+            }
+            // loadPlugin() reads these, so they have to point at the farm for the
+            // duration of the call — and nothing else may ever see them that way.
+            // A farm is a snapshot: left in place it hides files added later, and
+            // every other way of reloading the plugin (DMS's own reload IPC, a
+            // dev script, the button in Settings) would quietly serve that stale
+            // snapshot instead of the real folder.
+            const realPaths = ({})
+            const farmPaths = ({})
+            Object.keys(info.componentPaths).forEach(k => {
+                realPaths[k] = root.realPath(src, info.componentPaths[k])
+                farmPaths[k] = farm + "/" + root.relTo(src, realPaths[k])
+            })
+            info.componentPaths = farmPaths
+            // The settings surface is the one exception, and it is safe: DMS loads
+            // settingsPath from a plain file:// URL with no cache bust, so pointing
+            // it at the farm is the only way an edit there ever shows up. The farm
+            // it names is always the newest one, which pruning keeps.
+            if (info.settingsPath)
+                info.settingsPath = farm + "/" + root.relTo(src, root.realPath(src, info.settingsPath))
+            // `ps`, not `pluginService`: unloadPlugin destroys this object when the
+            // plugin being reloaded is Reloader itself, and the local reference
+            // outlives it where a property read would not.
+            ps.unloadPlugin(id)
+            const ok = ps.loadPlugin(id, true)
+            // The component is compiled and held by PluginService now, so handing
+            // the real paths back costs nothing and leaves no trace behind.
+            info.componentPaths = realPaths
+            root.setBusy(id, false)
+            if (!silent && root.showToasts) {
+                if (ok) ToastService.showInfo("Reloaded " + id + " ✓")
+                else    ToastService.showError("Reload failed: " + id, root.loadErrors[id] || "")
+            }
+            if (done) done(id, ok)
+            root.refresh()
+        }, 0, 10000, root)
+    }
+
+    // Rebuilds the QML graph against a fresh engine: DMS itself and every plugin,
+    // without restarting the process. The soft form keeps reloadable state, so
+    // there is no reason to pass true.
+    //
+    // `fallbackFor` is a plugin id when this is standing in for a hot reload whose
+    // farm could not be built, and empty when the user asked for it outright.
+    function reloadShell(fallbackFor) {
+        if (shellReloading) return
+        shellReloading = true
+        if (showToasts) {
+            if (fallbackFor)
+                ToastService.showWarning("Reloading the shell for " + fallbackFor,
+                                         "Could not prepare an isolated reload")
+            else
+                ToastService.showInfo("Reloading the shell…", "DMS and every plugin")
+        }
+        shellReloadTimer.restart()
+    }
+
+    Timer {
+        id: shellReloadTimer
+        interval: 150   // let the toast paint before the graph goes away
+        onTriggered: Quickshell.reload(false)
+    }
+
     // ---------- actions ----------
     function refresh() {
         Proc.runCommand("reloader.list", ["dms", "ipc", "call", "plugins", "list"], (stdout, code) => {
@@ -122,17 +271,7 @@ PluginComponent {
 
     function reloadOne(id, silent, done) {
         if (id === selfId) return
-        setBusy(id, true)
-        Proc.runCommand(null, ["dms", "ipc", "call", "plugins", "reload", id], (stdout, code) => {
-            root.setBusy(id, false)
-            const ok = code === 0 && !/error|fail/i.test(stdout)
-            if (!silent && root.showToasts) {
-                if (ok) ToastService.showInfo("Reloaded " + id + " ✓")
-                else    ToastService.showError("Reload failed: " + id, stdout.trim() || ("exit " + code))
-            }
-            if (done) done(id, ok, stdout)
-            root.refresh()
-        }, 0, 10000, root)
+        hotReload(id, silent, done)
     }
 
     function reloadMany(targets, what) {
@@ -320,6 +459,46 @@ PluginComponent {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: root.refresh()
                             onEntered: tip.show("Refresh the plugin list", syncBtn)
+                            onExited: tip.hide()
+                        }
+                    }
+
+                    // Sits past the sync button on purpose: it is the one action
+                    // here that takes the whole shell with it, so it should not be
+                    // a near miss for "Reload all".
+                    StyledRect {
+                        id: shellBtn
+                        width: shellRow.implicitWidth + Theme.spacingM * 2
+                        height: pop.rowHeight
+                        radius: Theme.cornerRadius
+                        color: shellMouse.containsMouse ? Theme.warning : Theme.surfaceContainerHigh
+                        opacity: root.shellReloading ? 0.6 : 1
+
+                        Row {
+                            id: shellRow
+                            anchors.centerIn: parent
+                            spacing: Theme.spacingXS
+                            DankIcon {
+                                name: "bolt"
+                                size: Theme.iconSize - 4
+                                color: shellMouse.containsMouse ? Theme.surface : Theme.surfaceText
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            StyledText {
+                                text: root.shellReloading ? "Reloading…" : "Reload shell"
+                                font.pixelSize: Theme.fontSizeMedium
+                                color: shellMouse.containsMouse ? Theme.surface : Theme.surfaceText
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+                        MouseArea {
+                            id: shellMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            enabled: !root.shellReloading
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.reloadShell("")
+                            onEntered: tip.show("Reloads DMS itself and every plugin · needed after editing DMS, not plugins", shellBtn)
                             onExited: tip.hide()
                         }
                     }
